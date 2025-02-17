@@ -1,0 +1,6 @@
+cache/
+__pycache__/
+tmp_cache/
+*.json
+*.stl
+*.log

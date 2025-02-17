@@ -26,6 +26,7 @@ class ModelGenerator(object):
             terrain_radius=500,
             include_osm_buildings=True,
             including_osm_roads=True,
+            include_osm_trees=True,
             import_in_aedt=False,
             plot_before_importing=False,
             z_offset=2,
@@ -70,6 +71,7 @@ class ModelGenerator(object):
         from osm import BuildingsPrep
         from osm import RoadPrep
         from osm import TerrainPrep
+        from osm import TreesPrep
 
         # output_path = self._app.working_directory
         output_path = "."
@@ -94,6 +96,18 @@ class ModelGenerator(object):
             building_mesh = building_geo["mesh"]
             building_dict = {"file_name": building_stl, "color": "grey", "material": "concrete"}
             parts_dict["buildings"] = building_dict
+
+        if include_osm_trees:
+            self.logger.info("Generating Tree Geometry")
+            tree_prep = TreesPrep(cad_path=output_path)
+            tree_geo = tree_prep.generate_trees(
+                latitude_longitude, terrain_mesh, max_radius=terrain_radius * 0.8
+            )
+            tree_stl = tree_geo["file_name"]
+            tree_mesh = tree_geo["mesh"]
+            tree_dict = {"file_name": tree_stl, "color": "green", "material": "wood"}
+            parts_dict["trees"] = tree_dict
+
         if including_osm_roads:
             self.logger.info("Generating Road Geometry")
             road_prep = RoadPrep(cad_path=output_path)
@@ -122,6 +136,7 @@ class ModelGenerator(object):
             "radius": terrain_radius,
             "include_buildings": include_osm_buildings,
             "include_roads": including_osm_roads,
+            "include_trees": include_osm_trees,
             "parts": parts_dict,
         }
 

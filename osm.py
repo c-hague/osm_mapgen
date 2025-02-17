@@ -470,3 +470,177 @@ class TerrainPrep(object):
                 all_utm[n, m] = [x, y]
         logger.info(str(100) + "% - Done")
         return all_data, all_lat_lon, all_utm
+
+class TreesPrep(object):
+    """Contains all basic functions needed to generate tree stl files."""
+
+    def __init__(self, cad_path):
+        self.cad_path = cad_path
+
+    @staticmethod
+    def create_tree_tops(all_pos):
+        """Generate a filled in polygon from outline.
+        Includes concave and convex shapes.
+
+        Parameters
+        ----------
+        all_pos : list
+
+        Returns
+        -------
+        :class:`pyvista.PolygonData`
+        """
+        points = vtk.vtkPoints()
+        for each in all_pos:
+            points.InsertNextPoint(each[0], each[1], each[2])
+
+        # Create the polygon
+        polygon = vtk.vtkPolygon()
+        polygon.GetPointIds().SetNumberOfIds(len(all_pos))  # make a quad
+        for n in range(len(all_pos)):
+            polygon.GetPointIds().SetId(n, n)
+
+        # Add the polygon to a list of polygons
+        polygons = vtk.vtkCellArray()
+        polygons.InsertNextCell(polygon)
+
+        # Create a PolyData
+        polygonPolyData = vtk.vtkPolyData()
+        polygonPolyData.SetPoints(points)
+        polygonPolyData.SetPolys(polygons)
+
+        # Create a mapper and actor
+        mapper = vtk.vtkPolyDataMapper()
+
+        mapper.SetInputData(polygonPolyData)
+
+        triFilter = vtk.vtkTriangleFilter()
+        # let's filter the polydata
+        triFilter.SetInputData(polygonPolyData)
+        triFilter.Update()
+
+        polygonPolyDataFiltered = triFilter.GetOutput()
+        roof = pv.PolyData(polygonPolyDataFiltered)
+        return roof
+
+    @staticmethod
+    def flip_tree_top_normals(polydata):
+        if polydata.face_normals.min() < 0:
+            polydata.flip_normals()
+
+    def generate_trees(self, center_lat_lon, terrain_mesh, tree_height=30, max_radius=500):
+        """Generate the treess stl file.
+
+        Parameters
+        ----------
+        center_lat_lon : list
+            Latitude and longitude.
+        terrain_mesh : :class:`pyvista.PolygonData`
+            Terrain mesh.
+        max_radius : float, int
+            Radius around latitude and longitude.
+
+        Returns
+        -------
+        dict
+            Info of generated stl file.
+        """
+        gdf = ox.geometries.geometries_from_point(center_lat_lon,  dist=max_radius, tags={"natural": 'wood'})
+        utm_center = utm.from_latlon(center_lat_lon[0], center_lat_lon[1])
+        center_offset_x = utm_center[0]
+        center_offset_y = utm_center[1]
+
+        if len(gdf) == 0:
+            logger.info("No Buildings Exists in Selected Geometry")
+            return {"file_name": None, "mesh": None}
+        else:
+            gdf_proj = ox.project_gdf(gdf)
+
+            geo = gdf_proj["geometry"]
+            geo = geo.array
+
+            tree_meshes = pv.PolyData()  # empty location where all trees meshes are stored
+
+            logger.info("\nGenerating trees")
+            last_displayed = -1
+            for n, _ in enumerate(geo):
+                g = geo[n]
+                if hasattr(g, "exterior"):
+                    outer = g.exterior
+
+                    xpos = np.array(outer.xy[0])
+                    ypos = np.array(outer.xy[1])
+
+                    points = np.zeros((np.shape(outer.xy)[1], 3))
+                    points[:, 0] = xpos
+                    points[:, 1] = ypos
+                    points[:, 0] -= center_offset_x
+                    points[:, 1] -= center_offset_y
+
+                    delta_elevation = 0
+                    if terrain_mesh:
+                        buffer = 50  # additional distance so intersection test is further away than directly on surface
+                        bb_terrain = terrain_mesh.bounds
+                        start_z = bb_terrain[4] - buffer
+                        stop_z = bb_terrain[5] + buffer
+
+                        # The shape files do not have z/elevation position. So for them to align to the
+                        # terrain we need to first get the position of the terrain at the xy position of shape file
+                        # this will align the buildins so they sit on the terrain no matter the location
+                        elevation_on_outline = []
+
+                        # check every point on the trees shape for z elevation location
+                        for point in points:
+                            # shoot ray to look for intersection point
+                            start_ray = [point[0], point[1], start_z]
+                            stop_ray = [point[0], point[1], stop_z]
+                            intersection_point, _ = terrain_mesh.ray_trace(start_ray, stop_ray)
+                            if len(intersection_point) != 0:
+                                z_surface_location = intersection_point.flatten()[2]
+                                elevation_on_outline.append(z_surface_location)
+                        # find lowest point on trees outline to align location
+                        if elevation_on_outline:
+                            min_elevation = np.min(elevation_on_outline)
+                            max_elevation = np.max(elevation_on_outline)
+                            delta_elevation = max_elevation - min_elevation
+
+                            # change z position to minimum elevation of terrain
+                            points[:, 2] = min_elevation
+                        else:
+                            points[:, 2] = start_z
+
+                    num_percent_bins = 40
+                    percent = np.round((n + 1) / (len(geo)) * 100, decimals=1)
+                    if percent % 10 == 0 and percent != last_displayed:
+                        last_displayed = percent
+                        perc_done = int(num_percent_bins * percent / 100)
+                        perc_left = num_percent_bins - perc_done
+                        percent_symbol1 = "." * perc_left
+                        percent_symbol2 = "#" * perc_done
+
+                        i = percent_symbol2 + percent_symbol1 + " " + str(percent) + "% "
+                        logger.info(f"\rPercent Complete:{i}")
+
+                    # create closed and filled polygon from outline of trees
+                    roof = self.create_tree_tops(points)
+                    self.flip_tree_top_normals(roof)
+                    extrude_h = tree_height
+
+                    outline = pv.lines_from_points(points, close=True)
+
+                    vert_walls = outline.extrude([0, 0, extrude_h + delta_elevation], inplace=False, capping=True)
+
+                    roof_location = np.array([0, 0, extrude_h + delta_elevation])
+                    roof.translate(roof_location, inplace=True)
+
+                    tree_meshes += vert_walls
+                    tree_meshes += roof
+
+            el = tree_meshes.points[:, 2]
+
+            tree_meshes["Elevation"] = el.ravel(order="F")
+
+            # file_out = self.cad_path + "\\treess.stl"
+            file_out = self.cad_path + "/trees.stl"
+            tree_meshes.save(file_out, binary=True)
+            return {"file_name": file_out, "mesh": tree_meshes}
