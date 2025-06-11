@@ -10,6 +10,7 @@ import logging
 import sys
 
 from osm import BuildingsPrep
+from osm import TreesPrep
 from osm import RoadPrep
 from osm import TerrainPrep
 
@@ -25,7 +26,11 @@ output_path = "."
 include_srtm_terrain = False
 include_osm_buildings = True
 include_osm_roads = False
+include_osm_trees = True
 min_elevation_shift = 0
+road_z_offset = .25
+road_width = 20
+road_step = 1
 env_name="demo2"
 ###############################################################################
 # Generate map and import
@@ -65,6 +70,18 @@ if include_osm_buildings:
     building_dict = {"file_name": building_stl, "color": "grey", "material": "concrete"}
     parts_dict["buildings"] = building_dict
 
+    
+if include_osm_trees:
+    logger.info("Generating Tree Geometry")
+    tree_prep = TreesPrep(cad_path=output_path)
+    tree_geo = tree_prep.generate_trees(
+        latitude_longitude, terrain_mesh, max_radius=terrain_radius * 0.8
+    )
+    tree_stl = tree_geo["file_name"]
+    tree_mesh = tree_geo["mesh"]
+    tree_dict = {"file_name": tree_stl, "color": "green", "material": "wood"}
+    parts_dict["trees"] = tree_dict
+
 if include_osm_roads:
     logger.info("Generating Road Geometry")
     road_prep = RoadPrep(cad_path=output_path)
@@ -72,7 +89,7 @@ if include_osm_roads:
         latitude_longitude,
         terrain_mesh,
         max_radius=terrain_radius,
-        z_offset=z_offset,
+        z_offset=road_z_offset,
         road_step=road_step,
         road_width=road_width,
     )
